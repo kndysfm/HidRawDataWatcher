@@ -10,6 +10,8 @@
     using System.Windows.Media;
     using Djlastnight.Hid;
     using Djlastnight.Input;
+    using Djlastnight.Hid.Usage;
+    using System.Diagnostics;
 
     internal partial class HidRawDataWatcher : Window
     {
@@ -232,6 +234,22 @@
                 }
                 else
                 {
+                    if (e.Device.IsStylus)
+                    {
+                        Debug.WriteLine("");
+                        foreach (var v in e.UsageValues)
+                        {
+                            var caps = v.Key;
+                            if ((caps.UsagePage & 0xFF00) == 0xFF00) continue; // skip Vendor-defined usage
+                            Debug.WriteLine($"{caps.UsagePage:X04}_{caps.NotRange.Usage:X04} : {v.Value}");
+                        }
+
+                        foreach (var bc in e.Device.InputButtonCapabilities)
+                        {
+                            var btn = e.Buttons[bc] ? "on": "off";
+                            Debug.WriteLine($"{bc.UsagePage:X04}_{bc.NotRange.Usage:X04} : {btn}");
+                        }
+                    }
                     // Other device
                     if (e.InputReport != null)
                     {
