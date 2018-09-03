@@ -9,7 +9,6 @@
     using System.Windows.Documents;
     using System.Windows.Media;
     using Djlastnight.Hid;
-    using Djlastnight.Input;
     using Djlastnight.Hid.Usage;
     using System.Diagnostics;
 
@@ -31,33 +30,11 @@
                 return;
             }
 
-            var devices = new List<IIinputDevice>();
-            devices.Add(VirtualKeyboard.Instance);
-            devices.AddRange(DeviceScanner.GetHidKeyboards());
-            devices.AddRange(DeviceScanner.GetHidMice());
-            devices.AddRange(DeviceScanner.GetUsbGamepads());
-            devices.AddRange(DeviceScanner.GetOtherHidDevices());
-            var devicesToRemove = new List<IIinputDevice>();
-            foreach (var device in devices)
+            var devices = HidDataReader.GetDevices();
+            foreach (var d in devices)
             {
-                if (device.DeviceType != DeviceType.Other)
-                {
-                    continue;
-                }
-
-                ushort vid = Convert.ToUInt16(device.Vendor, 16);
-                ushort pid = Convert.ToUInt16(device.Product, 16);
-                var rawDevices = HidDataReader.GetDevices().Where(d => d.ProductId == pid && d.VendorId == vid);
-
-                if (rawDevices.Count() == 0)
-                {
-                    devicesToRemove.Add(device);
-                }
-            }
-
-            foreach (var deviceToRemove in devicesToRemove)
-            {
-                devices.Remove(deviceToRemove);
+                ushort vid = d.VendorId;
+                ushort pid = d.ProductId;
             }
 
             this.listView.ItemsSource = devices;
@@ -107,13 +84,14 @@
             }
 
             this.reader = new HidDataReader(this);
+            this.reader.Device = (this.listView.SelectedItem as Device);
             this.reader.HidDataReceived += this.OnHidDataReceived;
 
             this.startButton.IsEnabled = false;
             this.stopButton.IsEnabled = true;
             this.listView.IsEnabled = false;
             this.rescanButton.IsEnabled = false;
-            this.Title = ApplicationInfo.AppName + " - " + (this.listView.SelectedItem as IIinputDevice).DeviceID;
+            this.Title = ApplicationInfo.AppName + " - " + (this.listView.SelectedItem as Device).FriendlyName;
         }
 
         private void OnHidDataReceived(object sender, HidEvent e)
@@ -125,7 +103,7 @@
                     return;
                 }
 
-                var currentDevice = this.listView.SelectedItem as IIinputDevice;
+                var currentDevice = this.listView.SelectedItem as Device;
                 if (currentDevice == null)
                 {
                     return;
@@ -149,29 +127,12 @@
                     return;
                 }
 
-                if (currentDevice is UsbGamepad && e.InputReport == null)
+                if (currentDevice.IsGamePad() && e.InputReport == null)
                 {
                     return;
                 }
 
-                var senderVid = e.Device.VendorId.ToString("X4");
-                var senderPid = e.Device.ProductId.ToString("X4");
-                if (currentDevice.Vendor != senderVid || currentDevice.Product != senderPid)
-                {
-                    return;
-                }
-
-                var senderTokens = e.Device.Name.Split(new char[] { '#' });
-                if (senderTokens.Length != 4)
-                {
-                    return;
-                }
-
-                var senderDeviceID = senderTokens[1].ToLower();
-                var currentTokens = currentDevice.DeviceID.Split(new char[] { '\\' });
-                var currDeviceID = currentTokens[1].ToLower();
-
-                if (senderDeviceID != currDeviceID)
+                if (currentDevice.Name != e.Device.Name)
                 {
                     return;
                 }
@@ -209,16 +170,16 @@
 
                 var paragraph = new Paragraph();
 
-                if (currentDevice is UsbGamepad)
+                if (currentDevice.IsGamePad())
                 {
                     paragraph = this.CreateColorParagraphFromData(e.InputReport, this.lastData);
                     this.lastData = e.InputReport;
                 }
-                else if (currentDevice is HidKeyboard)
+                else if (currentDevice.IsKeyboard)
                 {
                     paragraph.Inlines.Add(new Run(string.Format("{0} {1} | Make code: {2} | VKey: {3}", e.VirtualKey, e.IsButtonDown ? "[pressed]" : "[released]", e.RawInput.keyboard.MakeCode, e.RawInput.keyboard.VKey)));
                 }
-                else if (currentDevice is HidMouse)
+                else if (currentDevice.IsMouse)
                 {
                     // Getting the mouse buttons flags
                     var mouseButtonFlags = e.RawInput.mouse.buttonsStr.usButtonFlags;
@@ -234,22 +195,32 @@
                 }
                 else
                 {
-                    if (e.Device.IsStylus)
+                    if (currentDevice.IsStylus() || currentDevice.IsFinger())
                     {
-                        Debug.WriteLine("");
-                        foreach (var v in e.UsageValues)
+                        foreach (var c in e.Device.InputValueCapabilities)
                         {
-                            var caps = v.Key;
-                            if ((caps.UsagePage & 0xFF00) == 0xFF00) continue; // skip Vendor-defined usage
-                            Debug.WriteLine($"{caps.UsagePage:X04}_{caps.NotRange.Usage:X04} : {v.Value}");
+                            Debug.Assert(e.UsageValues.ContainsKey(c)); // must be contained in dictionary
+                            if ((c.UsagePage & 0xFF00) == 0xFF00) continue; // skip Vendor-defined usage
+
+                            Debug.WriteLine("");
+                            if (c.HasLink()) Debug.Write($"{c.GetLinkName()} | ");
+                            Debug.Write($"{c.GetName()} : {e.UsageValues[c]}"); // cap is key of dictionary
+                            if (c.HasUnit()) Debug.Write($" = {c.ConvertUnit(e.UsageValues[c])} [{c.GetUnit()}]");
                         }
 
-                        foreach (var bc in e.Device.InputButtonCapabilities)
+                        foreach (var c in e.Device.InputButtonCapabilities)
                         {
-                            var btn = e.Buttons[bc] ? "on": "off";
-                            Debug.WriteLine($"{bc.UsagePage:X04}_{bc.NotRange.Usage:X04} : {btn}");
+                            Debug.Assert(e.Buttons.ContainsKey(c)); // must be contained in dictionary
+
+                            Debug.WriteLine("");
+                            if (c.HasLink()) Debug.Write($"{c.GetLinkName()} | ");
+                            var btn = e.Buttons[c] ? "on": "off";
+                            Debug.Write($"{c.GetName()} : {btn}");
                         }
+
+                        Debug.WriteLine("");
                     }
+                    else
                     // Other device
                     if (e.InputReport != null)
                     {
@@ -338,7 +309,7 @@
 
         private void OnListviewSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            var item = this.listView.SelectedItem as IIinputDevice;
+            var item = this.listView.SelectedItem as Device;
             if (item == null)
             {
                 this.vid.Text = null;
@@ -347,9 +318,9 @@
             }
             else
             {
-                this.vid.Text = item.Vendor;
-                this.pid.Text = item.Product;
-                this.deviceId.Text = item.DeviceID;
+                this.vid.Text = item.VendorId.ToString("X04");
+                this.pid.Text = item.ProductId.ToString("X04");
+                this.deviceId.Text = item.Name;
             }
         }
 
